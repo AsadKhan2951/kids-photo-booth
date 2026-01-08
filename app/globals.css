@@ -1,0 +1,64 @@
+@import url("https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --kids-font: "Baloo 2", "Comic Sans MS", "Trebuchet MS", sans-serif;
+}
+
+@layer components {
+  .k-shell { @apply min-h-screen bg-slate-50 text-slate-900; }
+  .k-frame { @apply mx-auto w-full max-w-md px-4 py-6; }
+  .k-card { @apply rounded-3xl border-4 border-slate-800 bg-white shadow-lg overflow-hidden; }
+  .k-topbar { @apply px-6 py-4 text-center font-semibold tracking-wide text-slate-600; }
+  .k-title { @apply text-2xl font-extrabold tracking-tight; }
+  .k-subtitle { @apply mt-1 text-sm text-slate-500; }
+  .k-section { @apply px-6 py-6; }
+  .k-label { @apply text-xs font-semibold tracking-widest text-slate-600; }
+  .k-input { @apply mt-2 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-base outline-none focus:border-sky-400; }
+  .k-btn { @apply inline-flex w-full items-center justify-center rounded-2xl px-4 py-4 text-base font-semibold transition active:scale-[0.99]; }
+  .k-btn-primary { @apply bg-slate-900 text-white hover:bg-slate-800; }
+  .k-btn-ghost { @apply border-2 border-slate-300 bg-white text-slate-800 hover:bg-slate-50; }
+  .k-badge { @apply inline-flex items-center rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700; }
+  .k-pill { @apply inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700; }
+}
+
+@layer utilities {
+  .kids-font { font-family: var(--kids-font); }
+  @keyframes ms-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+
+  @keyframes ms-dash {
+    to { stroke-dashoffset: -44; }
+  }
+
+  .ms-float { animation: ms-float 6s ease-in-out infinite; }
+  .ms-float-slow { animation: ms-float 9s ease-in-out infinite; }
+  .ms-delay-1 { animation-delay: 0.8s; }
+  .ms-delay-2 { animation-delay: 1.6s; }
+  .ms-dash { stroke-dasharray: 10 12; animation: ms-dash 6s linear infinite; }
+
+  .slide-wrap { transition: opacity 220ms ease, transform 220ms ease; will-change: opacity, transform; }
+  .slide-in { opacity: 1; transform: translateX(0) scale(1); }
+  .slide-out { opacity: 0; transform: translateX(-10px) scale(0.99); }
+
+  @keyframes ms-arrow-left {
+    0% { opacity: 0; transform: translateX(-40px) translateY(10px) scale(0.85); }
+    60% { opacity: 1; transform: translateX(0) translateY(0) scale(1.02); }
+    100% { opacity: 1; transform: translateX(0) translateY(0) scale(1); }
+  }
+
+  @keyframes ms-arrow-right {
+    0% { opacity: 0; transform: translateX(40px) translateY(-10px) scale(0.85); }
+    60% { opacity: 1; transform: translateX(0) translateY(0) scale(1.02); }
+    100% { opacity: 1; transform: translateX(0) translateY(0) scale(1); }
+  }
+
+  .ms-arrow-left { animation: ms-arrow-left 1.4s ease-out 1 both; }
+  .ms-arrow-right { animation: ms-arrow-right 1.4s ease-out 1 both; animation-delay: 0.15s; }
+}
