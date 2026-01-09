@@ -46,7 +46,7 @@ export default function MainScreen() {
             />
           </div>
 
-          <svg
+          {/* <svg
             className="absolute left-[4%] top-[26%] w-[92%] h-[20%] pointer-events-none"
             viewBox="0 0 100 40"
             fill="none"
@@ -59,7 +59,7 @@ export default function MainScreen() {
               strokeLinecap="round"
               strokeDasharray="10 12"
             />
-          </svg>
+          </svg> */}
 
           <img
             src={IMG.arrowLeft}
