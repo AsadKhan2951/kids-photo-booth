@@ -72,14 +72,14 @@ const CHARACTER_FACE_CONFIG = {
     size: 36
   },
   teddy: {
-    cx: 50,
-    cy: 28,
-    size: 48
+    cx: 45,
+    cy: 35,
+    size: 75
   },
   pipper: {
     cx: 50,
-    cy: 26,
-    size: 36
+    cy: 22,
+    size: 66
   },
   default: {
     cx: 50,
