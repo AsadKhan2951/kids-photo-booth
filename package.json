@@ -9,7 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@imgly/background-removal": "^1.7.0",
+    "@banuba/webar": "^1.17.7",
+    "@mediapipe/face_mesh": "^0.4.1633559619",
     "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "@tensorflow-models/body-pix": "^2.2.1",
     "@tensorflow/tfjs-backend-cpu": "^4.22.0",

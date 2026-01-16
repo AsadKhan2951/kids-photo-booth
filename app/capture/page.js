@@ -6,13 +6,28 @@ import { useBooth } from "../../context/BoothContext";
 
 const BG_URL = "/assets/Capture%20Screen/Capture.png";
 const BTN_URL = "/assets/Capture%20Screen/Button.png";
-const FILTER_STYLE = "contrast(1.1) saturate(1.15) brightness(1.05)";
+const FILTER_STYLE = "brightness(1.08) contrast(1.2) saturate(1.3)";
+const BANUBA_TOKEN = process.env.NEXT_PUBLIC_BANUBA_TOKEN;
+const BANUBA_EFFECT_URL = process.env.NEXT_PUBLIC_BANUBA_EFFECT_URL || "";
+const USE_BANUBA = process.env.NEXT_PUBLIC_USE_BANUBA === "true";
+const BANUBA_MODULES = [
+  "/banuba/modules/face_tracker.zip",
+  "/banuba/modules/makeup.zip",
+  "/banuba/modules/skin.zip",
+  "/banuba/modules/eyes.zip",
+  "/banuba/modules/lips.zip",
+  "/banuba/modules/hair.zip"
+];
 
 export default function CaptureScreen() {
   const router = useRouter();
   const { state } = useBooth();
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const banubaContainerRef = useRef(null);
+  const banubaPlayerRef = useRef(null);
+  const banubaWebcamRef = useRef(null);
+  const useBanuba = USE_BANUBA && Boolean(BANUBA_TOKEN);
 
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
@@ -30,7 +45,27 @@ export default function CaptureScreen() {
     }
   };
 
+  const stopBanuba = async () => {
+    try {
+      if (banubaContainerRef.current) {
+        const { Dom } = await import("@banuba/webar");
+        Dom.unmount(banubaContainerRef.current);
+      }
+    } catch {}
+    if (banubaWebcamRef.current?.stop) {
+      banubaWebcamRef.current.stop();
+    }
+    if (banubaPlayerRef.current?.destroy) {
+      banubaPlayerRef.current.destroy().catch(() => {});
+    }
+    banubaPlayerRef.current = null;
+    banubaWebcamRef.current = null;
+  };
+
   const handleCapture = () => {
+    if (useBanuba) {
+      stopBanuba();
+    }
     stopStream();
     if (videoRef.current) {
       videoRef.current.srcObject = null;
@@ -68,6 +103,7 @@ export default function CaptureScreen() {
   }, [refreshDevices]);
 
   useEffect(() => {
+    if (useBanuba) return undefined;
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("Browser camera API not supported.");
       return undefined;
@@ -145,7 +181,57 @@ export default function CaptureScreen() {
       cancelled = true;
       stopStream();
     };
-  }, [selectedDeviceId, refreshDevices, retryTick]);
+  }, [selectedDeviceId, refreshDevices, retryTick, useBanuba]);
+
+  useEffect(() => {
+    if (!useBanuba) return undefined;
+    let active = true;
+    setReady(false);
+    setError("");
+    stopStream();
+
+    async function initBanuba() {
+      try {
+        const { Player, Webcam, Dom, Effect, Module } = await import("@banuba/webar");
+        if (!active || !banubaContainerRef.current) return;
+        const player = await Player.create({
+          clientToken: BANUBA_TOKEN,
+          locateFile: (file) => `/banuba/${file}`
+        });
+        for (const moduleUrl of BANUBA_MODULES) {
+          try {
+            await player.addModule(new Module(moduleUrl));
+          } catch (moduleErr) {
+            console.warn(`Banuba module failed: ${moduleUrl}`, moduleErr);
+          }
+        }
+        const webcam = new Webcam({
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: "user"
+        });
+        await player.use(webcam);
+        Dom.render(player, banubaContainerRef.current);
+        if (BANUBA_EFFECT_URL) {
+          await player.applyEffect(new Effect(BANUBA_EFFECT_URL));
+        }
+        player.play();
+        banubaPlayerRef.current = player;
+        banubaWebcamRef.current = webcam;
+        setReady(true);
+      } catch (err) {
+        console.error(err);
+        setError("Banuba camera start nahi ho raha. Token/Effect check karo.");
+      }
+    }
+
+    initBanuba();
+
+    return () => {
+      active = false;
+      stopBanuba();
+    };
+  }, [useBanuba, retryTick]);
 
   return (
     <div className="min-h-screen w-full bg-[#0b2d64] flex items-center justify-center px-4 py-6 kids-font">
@@ -157,14 +243,18 @@ export default function CaptureScreen() {
 
         <div className="absolute left-1/2 top-[31%] w-[66%] -translate-x-1/2">
           <div className="relative w-full aspect-square rounded-full overflow-hidden bg-[#0b2d64] shadow-[0_0_0_6px_rgba(255,255,255,0.08)]">
-            <video
-              ref={videoRef}
-              className="h-full w-full object-cover"
-              playsInline
-              muted
-              autoPlay
-              style={{ filter: FILTER_STYLE }}
-            />
+            {useBanuba ? (
+              <div ref={banubaContainerRef} className="h-full w-full" />
+            ) : (
+              <video
+                ref={videoRef}
+                className="h-full w-full object-cover"
+                playsInline
+                muted
+                autoPlay
+                style={{ filter: FILTER_STYLE }}
+              />
+            )}
             {!ready && !error ? (
               <div className="absolute inset-0 grid place-items-center text-xs font-semibold text-white/80">
                 Starting camera...

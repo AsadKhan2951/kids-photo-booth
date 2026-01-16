@@ -7,6 +7,19 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+const CAPTURE_FILTER = "brightness(1.08) contrast(1.2) saturate(1.3)";
+const BANUBA_TOKEN = process.env.NEXT_PUBLIC_BANUBA_TOKEN;
+const BANUBA_EFFECT_URL = process.env.NEXT_PUBLIC_BANUBA_EFFECT_URL || "";
+const USE_BANUBA = process.env.NEXT_PUBLIC_USE_BANUBA === "true";
+const BANUBA_MODULES = [
+  "/banuba/modules/face_tracker.zip",
+  "/banuba/modules/makeup.zip",
+  "/banuba/modules/skin.zip",
+  "/banuba/modules/eyes.zip",
+  "/banuba/modules/lips.zip",
+  "/banuba/modules/hair.zip"
+];
+
 export default function CameraView({
   onCaptured,
   burstCount = 5,
@@ -16,6 +29,11 @@ export default function CameraView({
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
+  const banubaContainerRef = useRef(null);
+  const banubaPlayerRef = useRef(null);
+  const banubaWebcamRef = useRef(null);
+  const banubaCaptureRef = useRef(null);
+  const useBanuba = USE_BANUBA && Boolean(BANUBA_TOKEN);
 
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
@@ -24,6 +42,14 @@ export default function CameraView({
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const startedRef = useRef(false);
   const [retryTick, setRetryTick] = useState(0);
+
+  const resetState = () => {
+    setReady(false);
+    setError("");
+    setCounting(false);
+    setCapturing(false);
+    startedRef.current = false;
+  };
 
   const stopStream = () => {
     if (streamRef.current) {
@@ -60,6 +86,7 @@ export default function CameraView({
   }, [refreshDevices]);
 
   useEffect(() => {
+    if (useBanuba) return undefined;
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("Browser camera API not supported.");
       return undefined;
@@ -68,11 +95,7 @@ export default function CameraView({
     let cancelled = false;
 
     async function init() {
-      setReady(false);
-      setError("");
-      setCounting(false);
-      setCapturing(false);
-      startedRef.current = false;
+      resetState();
       stopStream();
       await sleep(150);
 
@@ -141,7 +164,69 @@ export default function CameraView({
       cancelled = true;
       stopStream();
     };
-  }, [selectedDeviceId, refreshDevices, retryTick]);
+  }, [selectedDeviceId, refreshDevices, retryTick, useBanuba]);
+
+  useEffect(() => {
+    if (!useBanuba) return undefined;
+    let active = true;
+    resetState();
+
+    async function initBanuba() {
+      try {
+        const { Player, Webcam, Dom, Effect, ImageCapture, Module } = await import("@banuba/webar");
+        if (!active || !banubaContainerRef.current) return;
+        const player = await Player.create({
+          clientToken: BANUBA_TOKEN,
+          locateFile: (file) => `/banuba/${file}`
+        });
+        for (const moduleUrl of BANUBA_MODULES) {
+          try {
+            await player.addModule(new Module(moduleUrl));
+          } catch (moduleErr) {
+            console.warn(`Banuba module failed: ${moduleUrl}`, moduleErr);
+          }
+        }
+        const webcam = new Webcam({
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: "user"
+        });
+        await player.use(webcam);
+        Dom.render(player, banubaContainerRef.current);
+        if (BANUBA_EFFECT_URL) {
+          await player.applyEffect(new Effect(BANUBA_EFFECT_URL));
+        }
+        player.play();
+        banubaPlayerRef.current = player;
+        banubaWebcamRef.current = webcam;
+        banubaCaptureRef.current = new ImageCapture(player);
+        setReady(true);
+      } catch (e) {
+        console.error(e);
+        setError("Banuba camera start nahi ho raha. Token/Effect check karo.");
+      }
+    }
+
+    initBanuba();
+
+    return () => {
+      active = false;
+      try {
+        if (banubaContainerRef.current) {
+          import("@banuba/webar").then(({ Dom }) => Dom.unmount(banubaContainerRef.current)).catch(() => {});
+        }
+      } catch {}
+      if (banubaWebcamRef.current?.stop) {
+        banubaWebcamRef.current.stop();
+      }
+      if (banubaPlayerRef.current?.destroy) {
+        banubaPlayerRef.current.destroy().catch(() => {});
+      }
+      banubaCaptureRef.current = null;
+      banubaPlayerRef.current = null;
+      banubaWebcamRef.current = null;
+    };
+  }, [useBanuba, retryTick]);
 
   useEffect(() => {
     if (ready && !error && !counting && !capturing && !startedRef.current) {
@@ -150,7 +235,24 @@ export default function CameraView({
     }
   }, [ready, error, counting, capturing]);
 
-  const takeFrame = () => {
+  const blobToDataUrl = (blob) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+
+  const takeFrame = async () => {
+    if (banubaCaptureRef.current) {
+      try {
+        const blob = await banubaCaptureRef.current.takePhoto({
+          format: "image/jpeg",
+          quality: 0.92
+        });
+        return await blobToDataUrl(blob);
+      } catch (e) {
+        console.error(e);
+      }
+    }
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return null;
@@ -162,6 +264,7 @@ export default function CameraView({
     canvas.height = h;
 
     const ctx = canvas.getContext("2d");
+    ctx.filter = CAPTURE_FILTER;
     ctx.drawImage(video, 0, 0, w, h);
     return canvas.toDataURL("image/jpeg", 0.92);
   };
@@ -172,7 +275,7 @@ export default function CameraView({
 
     const shots = [];
     for (let i = 0; i < burstCount; i++) {
-      const dataUrl = takeFrame();
+      const dataUrl = await takeFrame();
       if (dataUrl) shots.push(dataUrl);
       await sleep(burstIntervalMs);
     }
@@ -187,13 +290,20 @@ export default function CameraView({
         className="absolute inset-0 bg-cover bg-center"
         style={{ backgroundImage: `url(${bgUrl})` }}
       />
-      <video
-        ref={videoRef}
-        className="absolute inset-0 h-full w-full object-cover opacity-0"
-        playsInline
-        muted
-        autoPlay
-      />
+      {useBanuba ? (
+        <div
+          ref={banubaContainerRef}
+          className="absolute inset-0 h-full w-full"
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          className="absolute inset-0 h-full w-full object-cover opacity-0"
+          playsInline
+          muted
+          autoPlay
+        />
+      )}
       <canvas ref={canvasRef} className="hidden" />
 
       {counting ? <Countdown seconds={3} onDone={onCountdownDone} /> : null}
