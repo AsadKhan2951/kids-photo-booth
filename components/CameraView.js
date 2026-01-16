@@ -7,10 +7,12 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-const CAPTURE_FILTER = "brightness(1.08) contrast(1.2) saturate(1.3)";
+const CAPTURE_FILTER = "brightness(1.08) contrast(1) saturate(1.3)";
 const BANUBA_TOKEN = process.env.NEXT_PUBLIC_BANUBA_TOKEN;
 const BANUBA_EFFECT_URL = process.env.NEXT_PUBLIC_BANUBA_EFFECT_URL || "";
 const USE_BANUBA = process.env.NEXT_PUBLIC_USE_BANUBA === "true";
+const CAMERA_PREF_KEY = "kids_photo_booth_camera";
+const PREFERRED_CAMERA_MATCH = [/insta360/i, /insta 360/i, /link/i, /virtual/i, /controller/i];
 const BANUBA_MODULES = [
   "/banuba/modules/face_tracker.zip",
   "/banuba/modules/makeup.zip",
@@ -58,16 +60,35 @@ export default function CameraView({
     }
   };
 
+  const pickPreferredCameraId = (cams, prev) => {
+    if (!cams.length) return "";
+    const hasLabels = cams.some((c) => c.label);
+    if (hasLabels) {
+      const preferred = cams.find((c) => PREFERRED_CAMERA_MATCH.some((rx) => rx.test(c.label)));
+      if (preferred) return preferred.deviceId;
+    }
+    let saved = "";
+    if (typeof window !== "undefined") {
+      saved = localStorage.getItem(CAMERA_PREF_KEY) || "";
+    }
+    if (saved && cams.some((c) => c.deviceId === saved)) {
+      return saved;
+    }
+    if (prev && cams.some((c) => c.deviceId === prev)) return prev;
+    return cams[0].deviceId;
+  };
+
   const refreshDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
     try {
       const list = await navigator.mediaDevices.enumerateDevices();
       const cams = list.filter((d) => d.kind === "videoinput");
       setSelectedDeviceId((prev) => {
-        if (prev && cams.some((c) => c.deviceId === prev)) {
-          return prev;
+        const next = pickPreferredCameraId(cams, prev);
+        if (next && next !== prev && typeof window !== "undefined") {
+          localStorage.setItem(CAMERA_PREF_KEY, next);
         }
-        return cams[0]?.deviceId || "";
+        return next;
       });
     } catch (err) {
       console.warn("Failed to enumerate camera devices", err);
@@ -140,10 +161,19 @@ export default function CameraView({
 
         streamRef.current = stream;
         if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
+          const video = videoRef.current;
+          video.srcObject = stream;
+          const markReady = () => {
+            if (cancelled) return;
+            setReady(true);
+            video.removeEventListener("loadedmetadata", markReady);
+            video.removeEventListener("canplay", markReady);
+          };
+          video.addEventListener("loadedmetadata", markReady);
+          video.addEventListener("canplay", markReady);
+          const playPromise = video.play();
+          if (playPromise?.then) playPromise.then(markReady).catch(() => {});
         }
-        setReady(true);
         refreshDevices();
       } catch (e) {
         console.error(e);

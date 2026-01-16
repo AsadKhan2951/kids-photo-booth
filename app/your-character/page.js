@@ -68,10 +68,10 @@ async function loadImageSafe(src, ms = 4000) {
 }
 
 const CHARACTER_FACE_CONFIG = {
-  migu: { cx: 40, cy: 40, size: 48, rot: -6, scaleX: 1.26, scaleY: 1.04 },
+  migu: { cx: 41, cy: 40, size: 48, rot: -12, scaleX: 1.5, scaleY: 1.08 },
   liya: { cx: 50, cy: 30, size: 44 },
-  teddy: { cx: 46, cy: 32, size: 78, scaleX: 1.32, scaleY: 1.12 },
-  pipper: { cx: 50.5, cy: 24, size: 70, scaleX: 1.30, scaleY: 1.05 },
+  teddy: { cx: 46.5, cy: 32, size: 80, scaleX: 1.35, scaleY: 1.12 },
+  pipper: { cx: 50, cy: 24, size: 70, scaleX: 1.30, scaleY: 1.05 },
   default: { cx: 50, cy: 22, size: 32 }
 };
 const FACE_TRIM = {

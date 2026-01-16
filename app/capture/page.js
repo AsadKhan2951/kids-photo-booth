@@ -10,6 +10,20 @@ const FILTER_STYLE = "brightness(1.08) contrast(1.2) saturate(1.3)";
 const BANUBA_TOKEN = process.env.NEXT_PUBLIC_BANUBA_TOKEN;
 const BANUBA_EFFECT_URL = process.env.NEXT_PUBLIC_BANUBA_EFFECT_URL || "";
 const USE_BANUBA = process.env.NEXT_PUBLIC_USE_BANUBA === "true";
+const MIN_FACE_RATIO = 0.55;
+const CAMERA_PREF_KEY = "kids_photo_booth_camera";
+const PREFERRED_CAMERA_MATCH = [/insta360/i, /insta 360/i, /link/i, /virtual/i, /controller/i];
+let faceApiPromise = null;
+
+async function loadFaceApi() {
+  if (!faceApiPromise) {
+    faceApiPromise = import("face-api.js").then(async (faceapi) => {
+      await faceapi.nets.tinyFaceDetector.loadFromUri("/models");
+      return faceapi;
+    });
+  }
+  return faceApiPromise;
+}
 const BANUBA_MODULES = [
   "/banuba/modules/face_tracker.zip",
   "/banuba/modules/makeup.zip",
@@ -24,6 +38,7 @@ export default function CaptureScreen() {
   const { state } = useBooth();
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const detectCanvasRef = useRef(null);
   const banubaContainerRef = useRef(null);
   const banubaPlayerRef = useRef(null);
   const banubaWebcamRef = useRef(null);
@@ -31,6 +46,8 @@ export default function CaptureScreen() {
 
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
+  const [distanceMsg, setDistanceMsg] = useState("");
+  const [checkingDistance, setCheckingDistance] = useState(false);
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [retryTick, setRetryTick] = useState(0);
 
@@ -62,7 +79,64 @@ export default function CaptureScreen() {
     banubaWebcamRef.current = null;
   };
 
-  const handleCapture = () => {
+  const checkFaceDistance = async () => {
+    if (useBanuba) return true;
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return true;
+
+    const canvas = detectCanvasRef.current || document.createElement("canvas");
+    detectCanvasRef.current = canvas;
+    const scale = Math.min(1, 480 / video.videoWidth);
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    try {
+      let ratio = 0;
+      if (typeof window !== "undefined" && "FaceDetector" in window) {
+        const detector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+        const faces = await detector.detect(canvas);
+        if (!faces || !faces.length) {
+          setDistanceMsg("Face detect nahi hua. Thora roshni me aa jao.");
+          return false;
+        }
+        const box = faces[0].boundingBox;
+        ratio = Math.max(box.width / canvas.width, box.height / canvas.height);
+      } else {
+        const faceapi = await loadFaceApi();
+        const detection = await faceapi.detectSingleFace(
+          canvas,
+          new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 })
+        );
+        if (!detection?.box) {
+          setDistanceMsg("Face detect nahi hua. Thora roshni me aa jao.");
+          return false;
+        }
+        ratio = Math.max(
+          detection.box.width / canvas.width,
+          detection.box.height / canvas.height
+        );
+      }
+      if (ratio < MIN_FACE_RATIO) {
+        setDistanceMsg("Kindly move slightly closer and then proceed with capturing the image.");
+        return false;
+      }
+      setDistanceMsg("");
+      return true;
+    } catch (err) {
+      console.warn("Face distance check failed", err);
+      return true;
+    }
+  };
+
+  const handleCapture = async () => {
+    if (checkingDistance) return;
+    setCheckingDistance(true);
+    const ok = await checkFaceDistance();
+    setCheckingDistance(false);
+    if (!ok) return;
+
     if (useBanuba) {
       stopBanuba();
     }
@@ -81,10 +155,32 @@ export default function CaptureScreen() {
       const list = await navigator.mediaDevices.enumerateDevices();
       const cams = list.filter((d) => d.kind === "videoinput");
       setSelectedDeviceId((prev) => {
+        if (!cams.length) return "";
+        const hasLabels = cams.some((c) => c.label);
+        if (hasLabels) {
+          const preferred = cams.find((c) => PREFERRED_CAMERA_MATCH.some((rx) => rx.test(c.label)));
+          if (preferred) {
+            if (typeof window !== "undefined") {
+              localStorage.setItem(CAMERA_PREF_KEY, preferred.deviceId);
+            }
+            return preferred.deviceId;
+          }
+        }
+        let saved = "";
+        if (typeof window !== "undefined") {
+          saved = localStorage.getItem(CAMERA_PREF_KEY) || "";
+        }
+        if (saved && cams.some((c) => c.deviceId === saved)) {
+          return saved;
+        }
         if (prev && cams.some((c) => c.deviceId === prev)) {
           return prev;
         }
-        return cams[0]?.deviceId || "";
+        const next = cams[0]?.deviceId || "";
+        if (next && typeof window !== "undefined") {
+          localStorage.setItem(CAMERA_PREF_KEY, next);
+        }
+        return next;
       });
     } catch (err) {
       console.warn("Failed to enumerate camera devices", err);
@@ -157,10 +253,19 @@ export default function CaptureScreen() {
 
         streamRef.current = stream;
         if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
+          const video = videoRef.current;
+          video.srcObject = stream;
+          const markReady = () => {
+            if (cancelled) return;
+            setReady(true);
+            video.removeEventListener("loadedmetadata", markReady);
+            video.removeEventListener("canplay", markReady);
+          };
+          video.addEventListener("loadedmetadata", markReady);
+          video.addEventListener("canplay", markReady);
+          const playPromise = video.play();
+          if (playPromise?.then) playPromise.then(markReady).catch(() => {});
         }
-        setReady(true);
         refreshDevices();
       } catch (err) {
         console.error(err);
@@ -287,6 +392,12 @@ export default function CaptureScreen() {
             <img src={BTN_URL} alt="" className="w-full h-auto" draggable="false" />
           </button>
         </div>
+
+        {distanceMsg ? (
+          <div className="absolute left-1/2 bottom-[20%] -translate-x-1/2 rounded-full bg-white/90 px-3 py-1 text-[11px] font-semibold text-[#0b2d64]">
+            {distanceMsg}
+          </div>
+        ) : null}
       </div>
     </div>
   );
