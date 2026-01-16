@@ -38,7 +38,7 @@ const DISPLAY_LAYOUT = {
   default: { top: 35, width: 82 }
 };
 
-const FACE_FOREHEAD_RATIO = 0.18;
+const FACE_FOREHEAD_RATIO = 0.26;
 
 const faceCutoutCache = new Map();
 const faceCutoutInflight = new Map();
@@ -68,11 +68,18 @@ async function loadImageSafe(src, ms = 4000) {
 }
 
 const CHARACTER_FACE_CONFIG = {
-  migu: { cx: 40, cy: 40, size: 42 },
+  migu: { cx: 40, cy: 40, size: 48, rot: -6, scaleX: 1.26, scaleY: 1.04 },
   liya: { cx: 50, cy: 30, size: 44 },
-  teddy: { cx: 50, cy: 30, size: 55 },
-  pipper: { cx: 50, cy: 30, size: 38 },
+  teddy: { cx: 46, cy: 32, size: 78, scaleX: 1.32, scaleY: 1.12 },
+  pipper: { cx: 50.5, cy: 24, size: 70, scaleX: 1.30, scaleY: 1.05 },
   default: { cx: 50, cy: 22, size: 32 }
+};
+const FACE_TRIM = {
+  migu: { top: 0.06, bottom: 0.0 },
+  teddy: { top: 0.08, bottom: 0.0 },
+  pipper: { top: 0.06, bottom: 0.0 },
+  liya: { top: 0.06, bottom: 0.0 },
+  default: { top: 0.06, bottom: 0.0 }
 };
 function enhanceFace(ctx) {
   ctx.filter = `
@@ -264,6 +271,24 @@ function createFallbackCutout(img) {
   return { image: out, size };
 }
 
+function trimCanvas(canvas, topRatio = 0, bottomRatio = 0) {
+  const top = Math.max(0, Math.round(canvas.height * topRatio));
+  const bottom = Math.max(0, Math.round(canvas.height * bottomRatio));
+  const newHeight = Math.max(1, canvas.height - top - bottom);
+  const out = document.createElement("canvas");
+  out.width = canvas.width;
+  out.height = newHeight;
+  const ctx = out.getContext("2d");
+  ctx.drawImage(canvas, 0, top, canvas.width, newHeight, 0, 0, canvas.width, newHeight);
+  return out;
+}
+
+function applyTrim(canvas, characterId) {
+  const trim = FACE_TRIM[characterId] || FACE_TRIM.default;
+  if (!trim?.top && !trim?.bottom) return canvas;
+  return trimCanvas(canvas, trim.top || 0, trim.bottom || 0);
+}
+
 function cropCanvasToBounds(canvas, bounds, padRatio = 0.1) {
   const sizeRaw = Math.max(bounds.width, bounds.height) * (1 + padRatio);
   const size = Math.max(1, Math.round(sizeRaw));
@@ -333,11 +358,20 @@ function buildFacePolygonFromMesh(landmarks, width, height) {
   });
 
   const faceHeight = Math.max(1, maxY - minY);
-  const cutoff = minY + faceHeight * 0.3;
-  const adjust = faceHeight * 0.07;
-  const adjusted = polygon.map((p) => (
-    p.y < cutoff ? { x: p.x, y: p.y + adjust } : p
-  ));
+  const expandX = faceHeight * 0.12;
+  const expandTop = faceHeight * 0.14;
+  const expandBottom = faceHeight * 0.16;
+  const centerX = (minX + maxX) / 2;
+  const adjusted = polygon.map((p) => {
+    const nx = centerX + (p.x - centerX) * (1 + expandX / Math.max(1, maxX - minX));
+    let ny = p.y;
+    if (p.y <= minY + faceHeight * 0.35) {
+      ny = Math.max(0, p.y - expandTop);
+    } else if (p.y >= minY + faceHeight * 0.75) {
+      ny = p.y + expandBottom;
+    }
+    return { x: nx, y: ny };
+  });
 
   let adjMinX = Infinity;
   let adjMinY = Infinity;
@@ -415,13 +449,14 @@ function applyEllipseMask(canvas, box, crop) {
   return out;
 }
 
-async function createFaceCutout(img, faceSrc) {
-  if (faceSrc) {
-    if (faceCutoutCache.has(faceSrc)) {
-      return faceCutoutCache.get(faceSrc);
+async function createFaceCutout(img, faceSrc, characterId) {
+  const cacheKey = faceSrc ? `${characterId || "default"}:${faceSrc}` : null;
+  if (cacheKey) {
+    if (faceCutoutCache.has(cacheKey)) {
+      return faceCutoutCache.get(cacheKey);
     }
-    if (faceCutoutInflight.has(faceSrc)) {
-      return faceCutoutInflight.get(faceSrc);
+    if (faceCutoutInflight.has(cacheKey)) {
+      return faceCutoutInflight.get(cacheKey);
     }
   }
 
@@ -429,7 +464,7 @@ async function createFaceCutout(img, faceSrc) {
     const sample = downscaleImage(img, 512);
     const fallback = createFallbackCutout(sample);
     if (FAST_FACE) {
-      return fallback;
+      return { image: applyTrim(fallback.image, characterId), size: fallback.size };
     }
 
     const meshLandmarks = await withTimeout(detectFaceMeshLandmarks(sample), 1800, null);
@@ -438,7 +473,8 @@ async function createFaceCutout(img, faceSrc) {
       if (polyData) {
         const masked = maskImageWithPolygon(sample, polyData.polygon);
         const tightened = cropCanvasToBounds(masked, polyData.bounds, 0.08);
-        return { image: tightened, size: tightened.width };
+        const trimmed = applyTrim(tightened, characterId);
+        return { image: trimmed, size: trimmed.width };
       }
     }
 
@@ -447,7 +483,8 @@ async function createFaceCutout(img, faceSrc) {
       const { polygon, bounds } = buildFacePolygon(detection.landmarks);
       const masked = maskImageWithPolygon(sample, polygon);
       const tightened = cropCanvasToBounds(masked, bounds, 0.08);
-      return { image: tightened, size: tightened.width };
+      const trimmed = applyTrim(tightened, characterId);
+      return { image: trimmed, size: trimmed.width };
     }
 
     const box = await withTimeout(detectFaceBox(sample), 1200, null);
@@ -471,16 +508,17 @@ async function createFaceCutout(img, faceSrc) {
     );
 
     const masked = applyEllipseMask(cropCanvas, box, crop);
-    return { image: masked, size: masked.width };
+    const trimmed = applyTrim(masked, characterId);
+    return { image: trimmed, size: trimmed.width };
   })();
 
-  if (faceSrc) {
-    faceCutoutInflight.set(faceSrc, job);
+  if (cacheKey) {
+    faceCutoutInflight.set(cacheKey, job);
   }
   const result = await job;
-  if (faceSrc) {
-    faceCutoutInflight.delete(faceSrc);
-    faceCutoutCache.set(faceSrc, result);
+  if (cacheKey) {
+    faceCutoutInflight.delete(cacheKey);
+    faceCutoutCache.set(cacheKey, result);
   }
 
   return result;
@@ -559,6 +597,7 @@ function findHoleBounds(characterImg) {
 
 function renderComposite(characterImg, faceCutout, characterId) {
   const cfg = CHARACTER_FACE_CONFIG[characterId] || CHARACTER_FACE_CONFIG.default;
+  const rotation = (cfg.rot || 0) * (Math.PI / 180);
 
   const canvas = document.createElement("canvas");
   canvas.width = characterImg.width;
@@ -569,8 +608,10 @@ function renderComposite(characterImg, faceCutout, characterId) {
   const size = (cfg.size / 100) * canvas.width;
   const cx = (cfg.cx / 100) * canvas.width;
   const cy = (cfg.cy / 100) * canvas.height;
-  const x = cx - size / 2;
-  const y = cy - size / 2;
+  const drawW = size * (cfg.scaleX || 1);
+  const drawH = size * (cfg.scaleY || 1);
+  const x = cx - drawW / 2;
+  const y = cy - drawH / 2;
 
   // --- DRAW FACE ---
   ctx.save();
@@ -579,10 +620,14 @@ function renderComposite(characterImg, faceCutout, characterId) {
   ctx.clip();
 
   enhanceFace(ctx);
-  ctx.drawImage(faceCutout, x, y, size, size);
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+  ctx.drawImage(faceCutout, -drawW / 2, -drawH / 2, drawW, drawH);
+  ctx.rotate(-rotation);
+  ctx.translate(-cx, -cy);
 
   ctx.globalCompositeOperation = "multiply";
-  drawInnerShadow(ctx, x, y, size, size);
+  drawInnerShadow(ctx, x, y, drawW, drawH);
   ctx.globalCompositeOperation = "source-over";
 
   ctx.restore();
@@ -596,11 +641,12 @@ function renderComposite(characterImg, faceCutout, characterId) {
 async function composeCharacterFast(characterImg, faceImg, characterId) {
   const sample = downscaleImage(faceImg, 512);
   const { image: faceCutout } = createFallbackCutout(sample);
-  return renderComposite(characterImg, faceCutout, characterId);
+  const trimmed = applyTrim(faceCutout, characterId);
+  return renderComposite(characterImg, trimmed, characterId);
 }
 
 async function composeCharacter(characterImg, faceImg, faceSrc, characterId) {
-  const { image: faceCutout } = await createFaceCutout(faceImg, faceSrc);
+  const { image: faceCutout } = await createFaceCutout(faceImg, faceSrc, characterId);
   return renderComposite(characterImg, faceCutout, characterId);
 }
 
@@ -652,19 +698,21 @@ export default function YourCharacterScreen() {
         return null;
       }
 
-      const fastComposite = await composeCharacterFast(characterImgObj, faceImgObj, characterId);
-      if (active) {
-        setCompositeSrc(fastComposite);
-        setComposite(fastComposite);
-        setLoadingComposite(false);
+      if (FAST_FACE) {
+        const fastComposite = await composeCharacterFast(characterImgObj, faceImgObj, characterId);
+        if (active) {
+          setCompositeSrc(fastComposite);
+          setComposite(fastComposite);
+          setLoadingComposite(false);
+        }
+        return fastComposite;
       }
-
-      if (FAST_FACE) return fastComposite;
 
       const refined = await composeCharacter(characterImgObj, faceImgObj, faceSrc, characterId);
       if (active) {
         setCompositeSrc(refined);
         setComposite(refined);
+        setLoadingComposite(false);
       }
       return refined;
     })();
