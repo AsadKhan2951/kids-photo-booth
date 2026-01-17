@@ -39,6 +39,7 @@ const DISPLAY_LAYOUT = {
 };
 
 const FACE_FOREHEAD_RATIO = 0.26;
+const FACE_PAD_RATIO = 0.14;
 
 const faceCutoutCache = new Map();
 const faceCutoutInflight = new Map();
@@ -225,7 +226,7 @@ function getCropFromBox(img, box) {
     };
   }
 
-  const scale = 0.9;
+  const scale = 1.05;
   const size = Math.max(box.width, box.height) * scale;
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height * 0.54;
@@ -472,7 +473,7 @@ async function createFaceCutout(img, faceSrc, characterId) {
       const polyData = buildFacePolygonFromMesh(meshLandmarks, sample.width, sample.height);
       if (polyData) {
         const masked = maskImageWithPolygon(sample, polyData.polygon);
-        const tightened = cropCanvasToBounds(masked, polyData.bounds, 0.08);
+        const tightened = cropCanvasToBounds(masked, polyData.bounds, FACE_PAD_RATIO);
         const trimmed = applyTrim(tightened, characterId);
         return { image: trimmed, size: trimmed.width };
       }
@@ -482,7 +483,7 @@ async function createFaceCutout(img, faceSrc, characterId) {
     if (detection?.landmarks) {
       const { polygon, bounds } = buildFacePolygon(detection.landmarks);
       const masked = maskImageWithPolygon(sample, polygon);
-      const tightened = cropCanvasToBounds(masked, bounds, 0.08);
+      const tightened = cropCanvasToBounds(masked, bounds, FACE_PAD_RATIO);
       const trimmed = applyTrim(tightened, characterId);
       return { image: trimmed, size: trimmed.width };
     }
