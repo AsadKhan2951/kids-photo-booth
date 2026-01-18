@@ -18,6 +18,7 @@ export default function YourCreationScreen() {
   const router = useRouter();
   const { state } = useBooth();
   const [toast, setToast] = useState("");
+  const characterId = state.character?.id;
 
   const finalImg = useMemo(() => {
     if (state.composite) return state.composite;
@@ -100,7 +101,8 @@ export default function YourCreationScreen() {
         <img
           src={finalImg || IMG.character}
           alt="Character"
-          className="absolute left-1/2 top-[30%] w-[80%] -translate-x-1/2"
+          className="absolute left-1/2 top-[30%] -translate-x-1/2"
+          style={{ width: characterId === "teddy" ? "50%" : "80%" }}
           draggable="false"
         />
 

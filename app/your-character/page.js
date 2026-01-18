@@ -14,6 +14,11 @@ const IMG = {
 
 const FILTER_STYLE = "contrast(1.18) saturate(1.22) brightness(1.06)";
 const FAST_FACE = process.env.NEXT_PUBLIC_FAST_FACE === "true";
+const USE_MANUS = process.env.NEXT_PUBLIC_USE_MANUS === "true";
+const MANUS_IMAGE_SIZE = Number(process.env.NEXT_PUBLIC_MANUS_IMAGE_SIZE || 320);
+const MANUS_PROMPT =
+  process.env.NEXT_PUBLIC_MANUS_PROMPT ||
+  "cute baby pixar style avatar face, big eyes, soft skin, 3d cartoon, clean background, no helmet, no headgear";
 
 const CHARACTER_IMG = {
   migu: "/assets/Character/Miru.png",
@@ -44,6 +49,9 @@ const FACE_PAD_RATIO = 0.14;
 const faceCutoutCache = new Map();
 const faceCutoutInflight = new Map();
 const compositeCache = new Map();
+const avatarCache = new Map();
+const avatarInflight = new Map();
+const avatarTaskCache = new Map();
 let faceApiPromise = null;
 let faceMeshPromise = null;
 
@@ -72,13 +80,13 @@ const CHARACTER_FACE_CONFIG = {
   migu: { cx: 41, cy: 40, size: 48, rot: -12, scaleX: 1.5, scaleY: 1.08 },
   liya: { cx: 50, cy: 30, size: 44 },
   teddy: { cx: 46.5, cy: 32, size: 80, scaleX: 1.35, scaleY: 1.12 },
-  pipper: { cx: 50, cy: 24, size: 70, scaleX: 1.30, scaleY: 1.05 },
+  pipper: { cx: 50, cy: 22.5, size: 78, scaleX: 1.32, scaleY: 1.12 },
   default: { cx: 50, cy: 22, size: 32 }
 };
 const FACE_TRIM = {
   migu: { top: 0.06, bottom: 0.0 },
   teddy: { top: 0.08, bottom: 0.0 },
-  pipper: { top: 0.06, bottom: 0.0 },
+  pipper: { top: 0.1, bottom: 0.0 },
   liya: { top: 0.06, bottom: 0.0 },
   default: { top: 0.06, bottom: 0.0 }
 };
@@ -288,6 +296,81 @@ function applyTrim(canvas, characterId) {
   const trim = FACE_TRIM[characterId] || FACE_TRIM.default;
   if (!trim?.top && !trim?.bottom) return canvas;
   return trimCanvas(canvas, trim.top || 0, trim.bottom || 0);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function toDataUrl(canvas, maxSize = MANUS_IMAGE_SIZE) {
+  const scaled = downscaleImage(canvas, maxSize);
+  return scaled.toDataURL("image/png");
+}
+
+async function pollAvatar(taskId) {
+  let delay = 1500;
+  for (let i = 0; i < 20; i += 1) {
+    const res = await fetch(`/api/manus/avatarize?taskId=${encodeURIComponent(taskId)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === "completed" && data.avatarDataUrl) {
+        return data.avatarDataUrl;
+      }
+      if (data.status === "failed") {
+        return null;
+      }
+    }
+    await sleep(delay);
+    delay = Math.min(5000, Math.round(delay * 1.35));
+  }
+  return null;
+}
+
+async function getAvatarDataUrl(faceCanvas, faceKey) {
+  if (!USE_MANUS || !faceCanvas) return null;
+  const cacheKey = faceKey || faceCanvas.toDataURL("image/png").slice(0, 120);
+  if (avatarCache.has(cacheKey)) return avatarCache.get(cacheKey);
+  if (avatarInflight.has(cacheKey)) return avatarInflight.get(cacheKey);
+
+  const job = (async () => {
+    try {
+      let taskId = avatarTaskCache.get(cacheKey);
+      if (!taskId) {
+        const imageData = toDataUrl(faceCanvas, 384);
+        const res = await fetch("/api/manus/avatarize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageData,
+            prompt: MANUS_PROMPT
+          })
+        });
+        if (res.status === 202) {
+          const data = await res.json();
+          taskId = data?.taskId;
+          if (taskId) avatarTaskCache.set(cacheKey, taskId);
+        } else if (res.ok) {
+          const data = await res.json();
+          if (data?.avatarDataUrl) return data.avatarDataUrl;
+          taskId = data?.taskId;
+          if (taskId) avatarTaskCache.set(cacheKey, taskId);
+        } else {
+          return null;
+        }
+      }
+      if (taskId) {
+        return await pollAvatar(taskId);
+      }
+      return null;
+    } catch (err) {
+      console.warn("Manus avatarization failed", err);
+      return null;
+    }
+  })();
+
+  avatarInflight.set(cacheKey, job);
+  const result = await job;
+  avatarInflight.delete(cacheKey);
+  if (result) avatarCache.set(cacheKey, result);
+  return result;
 }
 
 function cropCanvasToBounds(canvas, bounds, padRatio = 0.1) {
@@ -643,12 +726,26 @@ async function composeCharacterFast(characterImg, faceImg, characterId) {
   const sample = downscaleImage(faceImg, 512);
   const { image: faceCutout } = createFallbackCutout(sample);
   const trimmed = applyTrim(faceCutout, characterId);
-  return renderComposite(characterImg, trimmed, characterId);
+  const avatarDataUrl = await getAvatarDataUrl(trimmed, null);
+  if (USE_MANUS && !avatarDataUrl) return null;
+  let faceToUse = trimmed;
+  if (avatarDataUrl) {
+    const avatarImg = await loadImageSafe(avatarDataUrl, 8000);
+    if (avatarImg) faceToUse = avatarImg;
+  }
+  return renderComposite(characterImg, faceToUse, characterId);
 }
 
 async function composeCharacter(characterImg, faceImg, faceSrc, characterId) {
   const { image: faceCutout } = await createFaceCutout(faceImg, faceSrc, characterId);
-  return renderComposite(characterImg, faceCutout, characterId);
+  const avatarDataUrl = await getAvatarDataUrl(faceCutout, faceSrc);
+  if (USE_MANUS && !avatarDataUrl) return null;
+  let faceToUse = faceCutout;
+  if (avatarDataUrl) {
+    const avatarImg = await loadImageSafe(avatarDataUrl, 8000);
+    if (avatarImg) faceToUse = avatarImg;
+  }
+  return renderComposite(characterImg, faceToUse, characterId);
 }
 
 
@@ -659,6 +756,7 @@ export default function YourCharacterScreen() {
   const characterId = state.character?.id;
   const [compositeSrc, setCompositeSrc] = useState("");
   const [loadingComposite, setLoadingComposite] = useState(false);
+  const [avatarRetry, setAvatarRetry] = useState(0);
 
   const characterImg = useMemo(() => {
     if (!characterId) return null;
@@ -675,17 +773,21 @@ export default function YourCharacterScreen() {
   useEffect(() => {
     let active = true;
     if (!faceSrc || !characterImg) return undefined;
-    const key = `${characterId || "none"}:${faceSrc}`;
+    const avatarKey = USE_MANUS ? faceSrc : null;
+    const key = `${characterId || "none"}:${USE_MANUS ? "manus" : "raw"}:${MANUS_PROMPT}:${faceSrc}`;
 
     setCompositeSrc("");
     setLoadingComposite(true);
 
     if (compositeCache.has(key)) {
       const cached = compositeCache.get(key);
-      setCompositeSrc(cached);
-      setComposite(cached);
-      setLoadingComposite(false);
-      return undefined;
+      const allowCached = !USE_MANUS || (avatarKey && avatarCache.has(avatarKey));
+      if (allowCached) {
+        setCompositeSrc(cached);
+        setComposite(cached);
+        setLoadingComposite(false);
+        return undefined;
+      }
     }
 
     const job = (async () => {
@@ -701,7 +803,7 @@ export default function YourCharacterScreen() {
 
       if (FAST_FACE) {
         const fastComposite = await composeCharacterFast(characterImgObj, faceImgObj, characterId);
-        if (active) {
+        if (active && fastComposite) {
           setCompositeSrc(fastComposite);
           setComposite(fastComposite);
           setLoadingComposite(false);
@@ -710,7 +812,7 @@ export default function YourCharacterScreen() {
       }
 
       const refined = await composeCharacter(characterImgObj, faceImgObj, faceSrc, characterId);
-      if (active) {
+      if (active && refined) {
         setCompositeSrc(refined);
         setComposite(refined);
         setLoadingComposite(false);
@@ -720,7 +822,14 @@ export default function YourCharacterScreen() {
 
     job
       .then((out) => {
-        if (!out) return;
+        if (!out) {
+          if (!active) return;
+          setLoadingComposite(true);
+          setTimeout(() => {
+            if (active) setAvatarRetry((n) => n + 1);
+          }, 2500);
+          return;
+        }
         compositeCache.set(key, out);
       })
       .catch((err) => {
@@ -732,7 +841,7 @@ export default function YourCharacterScreen() {
     return () => {
       active = false;
     };
-  }, [faceSrc, characterImg, characterId]);
+  }, [faceSrc, characterImg, characterId, avatarRetry]);
 
   return (
     <div className="min-h-screen w-full bg-[#0b2d64] flex items-center justify-center px-4 py-6 kids-font">
@@ -773,8 +882,21 @@ export default function YourCharacterScreen() {
               />
             </div>
             {loadingComposite && !compositeSrc ? (
-              <div className="absolute inset-0 grid place-items-center text-xs font-semibold text-white/90">
-                Processing photo...
+              <div className="absolute inset-0 grid place-items-center">
+                <div className="rounded-2xl bg-white/15 px-5 py-4 text-center backdrop-blur-sm">
+                  <div className="relative mx-auto mb-3 h-14 w-14">
+                    <div className="absolute inset-0 rounded-full border-4 border-white/30 animate-ping" />
+                    <div className="absolute inset-2 rounded-full border-4 border-white/80" />
+                  </div>
+                  <div className="text-sm font-bold text-white drop-shadow">
+                    {USE_MANUS ? "Generating avatar..." : "Processing photo..."}
+                  </div>
+                  <div className="mt-2 flex items-center justify-center gap-1">
+                    <span className="h-2 w-2 rounded-full bg-white/90 animate-bounce" style={{ animationDelay: "0ms" }} />
+                    <span className="h-2 w-2 rounded-full bg-white/90 animate-bounce" style={{ animationDelay: "120ms" }} />
+                    <span className="h-2 w-2 rounded-full bg-white/90 animate-bounce" style={{ animationDelay: "240ms" }} />
+                  </div>
+                </div>
               </div>
             ) : null}
           </div>
