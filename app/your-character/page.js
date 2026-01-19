@@ -18,7 +18,7 @@ const USE_MANUS = process.env.NEXT_PUBLIC_USE_MANUS === "true";
 const MANUS_IMAGE_SIZE = Number(process.env.NEXT_PUBLIC_MANUS_IMAGE_SIZE || 320);
 const MANUS_PROMPT =
   process.env.NEXT_PUBLIC_MANUS_PROMPT ||
-  "cute baby pixar style avatar face, big eyes, soft skin, 3d cartoon, clean background, no helmet, no headgear";
+  "cute baby pixar style avatar face, big eyes, soft skin, 3d cartoon, clean background, highly accurate likeness, preserve all existing facial attributes (face shape, eyes, brows, nose, lips), keep skin tone, keep facial hair only if present in the input photo, do not add or remove beard or mustache, no helmet, no headgear";
 
 const CHARACTER_IMG = {
   migu: "/assets/Character/Miru.png",
