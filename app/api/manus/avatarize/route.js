@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import crypto from "crypto";
 
 export const runtime = "nodejs";
 
@@ -9,6 +10,8 @@ const DEFAULT_PROMPT =
   "cute baby pixar style avatar face, big eyes, soft skin, 3d cartoon, clean background, helmet friendly";
 const DEFAULT_AGENT_PROFILE = process.env.MANUS_AGENT_PROFILE || "manus-1.6";
 const DEFAULT_TASK_MODE = "agent";
+const TASK_CACHE_TTL_MS = 1000 * 60 * 60;
+const taskCache = new Map();
 
 const jsonResponse = (data, status = 200) => NextResponse.json(data, { status });
 
@@ -28,6 +31,31 @@ function sanitizeError(err) {
   if (!err) return "Unknown error";
   if (typeof err === "string") return err;
   return err.message || "Unknown error";
+}
+
+function hashPayload(imageData, prompt) {
+  return crypto
+    .createHash("sha256")
+    .update(prompt || "")
+    .update("|")
+    .update(imageData || "")
+    .digest("hex");
+}
+
+function readCache(key) {
+  if (!key) return null;
+  const entry = taskCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > TASK_CACHE_TTL_MS) {
+    taskCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function writeCache(key, entry) {
+  if (!key) return;
+  taskCache.set(key, { ...entry, ts: Date.now() });
 }
 
 async function manusFetch(path, options = {}) {
@@ -168,6 +196,15 @@ export async function POST(req) {
     }
 
     const filename = body?.filename || `face-${Date.now()}.png`;
+    const cacheKey = hashPayload(imageData, prompt);
+    const cached = readCache(cacheKey);
+    if (cached?.status === "completed" && cached.avatarDataUrl) {
+      return jsonResponse({ status: "completed", taskId: cached.taskId, avatarDataUrl: cached.avatarDataUrl, reused: true });
+    }
+    if (cached?.taskId && cached.status === "pending") {
+      return jsonResponse({ status: "pending", taskId: cached.taskId, reused: true }, 202);
+    }
+
     let task = null;
     if (MANUS_USE_FILEDATA) {
       task = await createTaskWithFileData({ prompt, filename, fileData: imageData });
@@ -188,12 +225,15 @@ export async function POST(req) {
     if (!taskId) {
       return jsonResponse({ error: "Task creation failed" }, 502);
     }
+    writeCache(cacheKey, { taskId, status: "pending" });
 
     const completed = await waitForTask(taskId);
     if (!completed) {
+      writeCache(cacheKey, { taskId, status: "pending" });
       return jsonResponse({ status: "pending", taskId }, 202);
     }
     if (completed.status === "failed") {
+      writeCache(cacheKey, { taskId, status: "failed" });
       return jsonResponse({ status: "failed", taskId, error: completed.error || "Task failed" }, 500);
     }
 
@@ -202,6 +242,7 @@ export async function POST(req) {
       return jsonResponse({ status: "completed", taskId, error: "No output file found" }, 502);
     }
     const avatarDataUrl = await fetchAvatarDataUrl(outputFile);
+    writeCache(cacheKey, { taskId, status: "completed", avatarDataUrl });
     return jsonResponse({ status: "completed", taskId, avatarDataUrl });
   } catch (err) {
     return jsonResponse({ error: sanitizeError(err) }, 500);
