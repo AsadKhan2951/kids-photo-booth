@@ -55,6 +55,67 @@ const avatarTaskCache = new Map();
 let faceApiPromise = null;
 let faceMeshPromise = null;
 
+const MANUS_TASK_STORAGE_KEY = "kids_photo_booth_manus_tasks_v1";
+const MANUS_TASK_TTL_MS = 1000 * 60 * 60;
+
+function hashString(input) {
+  let hash = 5381;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = ((hash << 5) + hash) ^ input.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function getManusCacheKey(sourceDataUrl) {
+  if (!sourceDataUrl) return null;
+  return `manus_${hashString(`${MANUS_PROMPT}|${MANUS_IMAGE_SIZE}|${sourceDataUrl}`)}`;
+}
+
+function readTaskStore() {
+  if (typeof window === "undefined") return {};
+  try {
+    return JSON.parse(localStorage.getItem(MANUS_TASK_STORAGE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeTaskStore(store) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(MANUS_TASK_STORAGE_KEY, JSON.stringify(store));
+  } catch {}
+}
+
+function getStoredTaskId(cacheKey) {
+  if (!cacheKey) return null;
+  const store = readTaskStore();
+  const entry = store[cacheKey];
+  if (!entry) return null;
+  if (Date.now() - entry.ts > MANUS_TASK_TTL_MS) {
+    delete store[cacheKey];
+    writeTaskStore(store);
+    return null;
+  }
+  return entry.taskId || null;
+}
+
+function setStoredTaskId(cacheKey, taskId) {
+  if (!cacheKey || !taskId || typeof window === "undefined") return;
+  const store = readTaskStore();
+  store[cacheKey] = { taskId, ts: Date.now() };
+  writeTaskStore(store);
+}
+
+function clearStoredTaskId(cacheKey) {
+  if (!cacheKey || typeof window === "undefined") return;
+  const store = readTaskStore();
+  if (store[cacheKey]) {
+    delete store[cacheKey];
+    writeTaskStore(store);
+  }
+}
+
 async function loadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -343,7 +404,8 @@ async function pollAvatar(taskId) {
 
 async function getAvatarDataUrl(faceCanvas, faceKey, sourceDataUrl) {
   if (!USE_MANUS) return null;
-  const cacheKey = faceKey || sourceDataUrl || faceCanvas?.toDataURL("image/png").slice(0, 120);
+  const rawKey = sourceDataUrl || faceKey || "";
+  const cacheKey = getManusCacheKey(rawKey);
   if (!cacheKey) return null;
   if (avatarCache.has(cacheKey)) return avatarCache.get(cacheKey);
   if (avatarInflight.has(cacheKey)) return avatarInflight.get(cacheKey);
@@ -351,6 +413,10 @@ async function getAvatarDataUrl(faceCanvas, faceKey, sourceDataUrl) {
   const job = (async () => {
     try {
       let taskId = avatarTaskCache.get(cacheKey);
+      if (!taskId) {
+        taskId = getStoredTaskId(cacheKey);
+        if (taskId) avatarTaskCache.set(cacheKey, taskId);
+      }
       if (!taskId) {
         const imageData = await toDataUrlFromSource(sourceDataUrl, MANUS_IMAGE_SIZE)
           || (faceCanvas ? toDataUrl(faceCanvas, MANUS_IMAGE_SIZE) : null);
@@ -366,12 +432,18 @@ async function getAvatarDataUrl(faceCanvas, faceKey, sourceDataUrl) {
         if (res.status === 202) {
           const data = await res.json();
           taskId = data?.taskId;
-          if (taskId) avatarTaskCache.set(cacheKey, taskId);
+          if (taskId) {
+            avatarTaskCache.set(cacheKey, taskId);
+            setStoredTaskId(cacheKey, taskId);
+          }
         } else if (res.ok) {
           const data = await res.json();
           if (data?.avatarDataUrl) return data.avatarDataUrl;
           taskId = data?.taskId;
-          if (taskId) avatarTaskCache.set(cacheKey, taskId);
+          if (taskId) {
+            avatarTaskCache.set(cacheKey, taskId);
+            setStoredTaskId(cacheKey, taskId);
+          }
         } else {
           return null;
         }
@@ -389,7 +461,10 @@ async function getAvatarDataUrl(faceCanvas, faceKey, sourceDataUrl) {
   avatarInflight.set(cacheKey, job);
   const result = await job;
   avatarInflight.delete(cacheKey);
-  if (result) avatarCache.set(cacheKey, result);
+  if (result) {
+    avatarCache.set(cacheKey, result);
+    clearStoredTaskId(cacheKey);
+  }
   return result;
 }
 
@@ -796,6 +871,7 @@ export default function YourCharacterScreen() {
   const [compositeSrc, setCompositeSrc] = useState("");
   const [loadingComposite, setLoadingComposite] = useState(false);
   const [avatarRetry, setAvatarRetry] = useState(0);
+  const avatarKey = useMemo(() => (USE_MANUS ? getManusCacheKey(faceSrc || "") : null), [faceSrc]);
 
   const characterImg = useMemo(() => {
     if (!characterId) return null;
@@ -812,7 +888,6 @@ export default function YourCharacterScreen() {
   useEffect(() => {
     let active = true;
     if (!faceSrc || !characterImg) return undefined;
-    const avatarKey = USE_MANUS ? faceSrc : null;
     const key = `${characterId || "none"}:${USE_MANUS ? "manus" : "raw"}:${MANUS_PROMPT}:${faceSrc}`;
 
     setCompositeSrc("");
