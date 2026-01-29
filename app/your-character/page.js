@@ -76,6 +76,15 @@ async function loadImageSafe(src, ms = 4000) {
   }
 }
 
+function drawCover(ctx, img, x, y, w, h) {
+  const scale = Math.max(w / img.width, h / img.height);
+  const drawW = img.width * scale;
+  const drawH = img.height * scale;
+  const dx = x + (w - drawW) / 2;
+  const dy = y + (h - drawH) / 2;
+  ctx.drawImage(img, dx, dy, drawW, drawH);
+}
+
 const CHARACTER_FACE_CONFIG = {
   migu: { cx: 41, cy: 40, size: 48, rot: -12, scaleX: 1.5, scaleY: 1.08 },
   liya: { cx: 50, cy: 30, size: 44 },
@@ -305,6 +314,14 @@ function toDataUrl(canvas, maxSize = MANUS_IMAGE_SIZE) {
   return scaled.toDataURL("image/png");
 }
 
+async function toDataUrlFromSource(sourceDataUrl, maxSize = MANUS_IMAGE_SIZE) {
+  if (!sourceDataUrl) return null;
+  const img = await loadImageSafe(sourceDataUrl, 5000);
+  if (!img) return null;
+  const scaled = downscaleImage(img, maxSize);
+  return scaled.toDataURL("image/png");
+}
+
 async function pollAvatar(taskId) {
   let delay = 1500;
   for (let i = 0; i < 20; i += 1) {
@@ -324,9 +341,10 @@ async function pollAvatar(taskId) {
   return null;
 }
 
-async function getAvatarDataUrl(faceCanvas, faceKey) {
-  if (!USE_MANUS || !faceCanvas) return null;
-  const cacheKey = faceKey || faceCanvas.toDataURL("image/png").slice(0, 120);
+async function getAvatarDataUrl(faceCanvas, faceKey, sourceDataUrl) {
+  if (!USE_MANUS) return null;
+  const cacheKey = faceKey || sourceDataUrl || faceCanvas?.toDataURL("image/png").slice(0, 120);
+  if (!cacheKey) return null;
   if (avatarCache.has(cacheKey)) return avatarCache.get(cacheKey);
   if (avatarInflight.has(cacheKey)) return avatarInflight.get(cacheKey);
 
@@ -334,7 +352,9 @@ async function getAvatarDataUrl(faceCanvas, faceKey) {
     try {
       let taskId = avatarTaskCache.get(cacheKey);
       if (!taskId) {
-        const imageData = toDataUrl(faceCanvas, 384);
+        const imageData = await toDataUrlFromSource(sourceDataUrl, MANUS_IMAGE_SIZE)
+          || (faceCanvas ? toDataUrl(faceCanvas, MANUS_IMAGE_SIZE) : null);
+        if (!imageData) return null;
         const res = await fetch("/api/manus/avatarize", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -371,6 +391,19 @@ async function getAvatarDataUrl(faceCanvas, faceKey) {
   avatarInflight.delete(cacheKey);
   if (result) avatarCache.set(cacheKey, result);
   return result;
+}
+
+function maskAvatarWithCutout(avatarImg, cutoutCanvas) {
+  if (!avatarImg || !cutoutCanvas) return null;
+  const out = document.createElement("canvas");
+  out.width = cutoutCanvas.width;
+  out.height = cutoutCanvas.height;
+  const ctx = out.getContext("2d");
+  drawCover(ctx, avatarImg, 0, 0, out.width, out.height);
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.drawImage(cutoutCanvas, 0, 0, out.width, out.height);
+  ctx.globalCompositeOperation = "source-over";
+  return out;
 }
 
 function cropCanvasToBounds(canvas, bounds, padRatio = 0.1) {
@@ -722,28 +755,34 @@ function renderComposite(characterImg, faceCutout, characterId) {
   return canvas.toDataURL("image/png");
 }
 
-async function composeCharacterFast(characterImg, faceImg, characterId) {
+async function composeCharacterFast(characterImg, faceImg, characterId, faceSrc) {
   const sample = downscaleImage(faceImg, 512);
   const { image: faceCutout } = createFallbackCutout(sample);
   const trimmed = applyTrim(faceCutout, characterId);
-  const avatarDataUrl = await getAvatarDataUrl(trimmed, null);
+  const avatarDataUrl = await getAvatarDataUrl(trimmed, null, faceSrc);
   if (USE_MANUS && !avatarDataUrl) return null;
   let faceToUse = trimmed;
   if (avatarDataUrl) {
     const avatarImg = await loadImageSafe(avatarDataUrl, 8000);
-    if (avatarImg) faceToUse = avatarImg;
+    if (avatarImg) {
+      const masked = maskAvatarWithCutout(avatarImg, trimmed);
+      faceToUse = masked || avatarImg;
+    }
   }
   return renderComposite(characterImg, faceToUse, characterId);
 }
 
 async function composeCharacter(characterImg, faceImg, faceSrc, characterId) {
   const { image: faceCutout } = await createFaceCutout(faceImg, faceSrc, characterId);
-  const avatarDataUrl = await getAvatarDataUrl(faceCutout, faceSrc);
+  const avatarDataUrl = await getAvatarDataUrl(faceCutout, faceSrc, faceSrc);
   if (USE_MANUS && !avatarDataUrl) return null;
   let faceToUse = faceCutout;
   if (avatarDataUrl) {
     const avatarImg = await loadImageSafe(avatarDataUrl, 8000);
-    if (avatarImg) faceToUse = avatarImg;
+    if (avatarImg) {
+      const masked = maskAvatarWithCutout(avatarImg, faceCutout);
+      faceToUse = masked || avatarImg;
+    }
   }
   return renderComposite(characterImg, faceToUse, characterId);
 }
@@ -802,7 +841,7 @@ export default function YourCharacterScreen() {
       }
 
       if (FAST_FACE) {
-        const fastComposite = await composeCharacterFast(characterImgObj, faceImgObj, characterId);
+        const fastComposite = await composeCharacterFast(characterImgObj, faceImgObj, characterId, faceSrc);
         if (active && fastComposite) {
           setCompositeSrc(fastComposite);
           setComposite(fastComposite);
