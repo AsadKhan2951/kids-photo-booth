@@ -7,7 +7,7 @@ const MANUS_API_KEY = process.env.MANUS_API_KEY;
 const MANUS_BASE_URL = "https://api.manus.ai/v1";
 const MANUS_USE_FILEDATA = process.env.MANUS_USE_FILEDATA !== "false";
 const DEFAULT_PROMPT =
-  "cute baby pixar style avatar face, big eyes, soft skin, 3d cartoon, clean background, helmet friendly";
+  "Create a high-quality Pixar-style 3D avatar using the uploaded photo as a strict reference. Match the facial structure, eyes, nose, lips, cheeks, jawline, beard, and hairstyle exactly to the reference photo. Preserve the original skin tone precisely as in the photo — no darkening, no whitening, no tanning, no pink or orange shift. Use neutral daylight lighting with accurate color balance. Pixar style should affect only proportions, smoothness, and rendering quality, not skin color or ethnicity. Natural, clean, soft 3D render with realistic yet cute Pixar-like features. Color accuracy priority: VERY HIGH Skin tone fidelity: STRICT";
 const DEFAULT_AGENT_PROFILE = process.env.MANUS_AGENT_PROFILE || "manus-1.6";
 const DEFAULT_TASK_MODE = "agent";
 const TASK_CACHE_TTL_MS = 1000 * 60 * 60;
