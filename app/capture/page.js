@@ -6,19 +6,21 @@ import { useBooth } from "../../context/BoothContext";
 
 const BG_URL = "/assets/Capture%20Screen/Capture.png";
 const BTN_URL = "/assets/Capture%20Screen/Button.png";
-const FILTER_STYLE = "brightness(1.08) contrast(1.2) saturate(1.3)";
+const FILTER_STYLE = "";
 const BANUBA_TOKEN = process.env.NEXT_PUBLIC_BANUBA_TOKEN;
 const BANUBA_EFFECT_URL = process.env.NEXT_PUBLIC_BANUBA_EFFECT_URL || "";
 const USE_BANUBA = process.env.NEXT_PUBLIC_USE_BANUBA === "true";
-const MIN_FACE_RATIO = 0.55;
+const MIN_FACE_RATIO = 0.18;
+const MAX_FACE_TILT_DEG = 8;
 const CAMERA_PREF_KEY = "kids_photo_booth_camera";
-const PREFERRED_CAMERA_MATCH = [/insta360/i, /insta 360/i, /link/i, /virtual/i, /controller/i];
+const PREFERRED_CAMERA_MATCH = [/logitech/i, /c920e/i, /c920/i, /insta360/i, /insta 360/i, /link/i, /virtual/i, /controller/i];
 let faceApiPromise = null;
 
 async function loadFaceApi() {
   if (!faceApiPromise) {
     faceApiPromise = import("face-api.js").then(async (faceapi) => {
       await faceapi.nets.tinyFaceDetector.loadFromUri("/models");
+      await faceapi.nets.faceLandmark68TinyNet.loadFromUri("/models");
       return faceapi;
     });
   }
@@ -35,13 +37,15 @@ const BANUBA_MODULES = [
 
 export default function CaptureScreen() {
   const router = useRouter();
-  const { state } = useBooth();
+  const { state, setShots } = useBooth();
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const detectCanvasRef = useRef(null);
+  const captureCanvasRef = useRef(null);
   const banubaContainerRef = useRef(null);
   const banubaPlayerRef = useRef(null);
   const banubaWebcamRef = useRef(null);
+  const banubaCaptureRef = useRef(null);
   const useBanuba = USE_BANUBA && Boolean(BANUBA_TOKEN);
 
   const [ready, setReady] = useState(false);
@@ -77,6 +81,7 @@ export default function CaptureScreen() {
     }
     banubaPlayerRef.current = null;
     banubaWebcamRef.current = null;
+    banubaCaptureRef.current = null;
   };
 
   const checkFaceDistance = async () => {
@@ -93,35 +98,42 @@ export default function CaptureScreen() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     try {
-      let ratio = 0;
-      if (typeof window !== "undefined" && "FaceDetector" in window) {
-        const detector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
-        const faces = await detector.detect(canvas);
-        if (!faces || !faces.length) {
-          setDistanceMsg("Face detect nahi hua. Thora roshni me aa jao.");
-          return false;
-        }
-        const box = faces[0].boundingBox;
-        ratio = Math.max(box.width / canvas.width, box.height / canvas.height);
-      } else {
-        const faceapi = await loadFaceApi();
-        const detection = await faceapi.detectSingleFace(
+      const faceapi = await loadFaceApi();
+      const detection = await faceapi
+        .detectSingleFace(
           canvas,
           new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 })
-        );
-        if (!detection?.box) {
-          setDistanceMsg("Face detect nahi hua. Thora roshni me aa jao.");
-          return false;
-        }
-        ratio = Math.max(
-          detection.box.width / canvas.width,
-          detection.box.height / canvas.height
-        );
+        )
+        .withFaceLandmarks(true);
+
+      if (!detection?.detection?.box || !detection?.landmarks) {
+        setDistanceMsg("Face was not detected. Please move into better lighting.");
+        return false;
       }
+
+      const box = detection.detection.box;
+      const ratio = Math.max(box.width / canvas.width, box.height / canvas.height);
       if (ratio < MIN_FACE_RATIO) {
         setDistanceMsg("Kindly move slightly closer and then proceed with capturing the image.");
         return false;
       }
+
+      const leftEye = detection.landmarks.getLeftEye();
+      const rightEye = detection.landmarks.getRightEye();
+      if (leftEye.length && rightEye.length) {
+        const left = leftEye.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+        const right = rightEye.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+        const lx = left.x / leftEye.length;
+        const ly = left.y / leftEye.length;
+        const rx = right.x / rightEye.length;
+        const ry = right.y / rightEye.length;
+        const angleDeg = Math.atan2(ry - ly, rx - lx) * (180 / Math.PI);
+        if (Math.abs(angleDeg) > MAX_FACE_TILT_DEG) {
+          setDistanceMsg("Please keep your face straight.");
+          return false;
+        }
+      }
+
       setDistanceMsg("");
       return true;
     } catch (err) {
@@ -137,8 +149,14 @@ export default function CaptureScreen() {
     setCheckingDistance(false);
     if (!ok) return;
 
+    const dataUrl = await takeSnapshot();
+    if (!dataUrl) {
+      setError("Capture nahi ho saka. Camera frame nahi mila. Retry karo.");
+      return;
+    }
+
     if (useBanuba) {
-      stopBanuba();
+      await stopBanuba();
     }
     stopStream();
     if (videoRef.current) {
@@ -146,7 +164,8 @@ export default function CaptureScreen() {
     }
     setReady(false);
     setError("");
-    setTimeout(() => router.push("/camera"), 180);
+    setShots([dataUrl]);
+    router.push("/your-character");
   };
 
   const refreshDevices = useCallback(async () => {
@@ -271,11 +290,11 @@ export default function CaptureScreen() {
         console.error(err);
         const name = err?.name || "";
         if (name === "NotAllowedError") {
-          setError("Camera permission denied. Chrome me site camera allow karo.");
+          setError("Camera permission denied. Please allow camera access for the site in Chrome.");
         } else if (selectedDeviceId) {
-          setError("Selected camera available nahi hai. Insta360 connect karein ya list se dusra camera choose karein.");
+          setError("The selected camera is not available. Please connect your Insta360 camera or choose another camera from the list.");
         } else {
-          setError("Camera access nahi ho raha. WebCam busy hai to close karke retry karo.");
+          setError("Camera access is not working. If the webcam is busy, please close other applications and try again.");
         }
       }
     }
@@ -297,7 +316,7 @@ export default function CaptureScreen() {
 
     async function initBanuba() {
       try {
-        const { Player, Webcam, Dom, Effect, Module } = await import("@banuba/webar");
+        const { Player, Webcam, Dom, Effect, ImageCapture, Module } = await import("@banuba/webar");
         if (!active || !banubaContainerRef.current) return;
         const player = await Player.create({
           clientToken: BANUBA_TOKEN,
@@ -323,6 +342,7 @@ export default function CaptureScreen() {
         player.play();
         banubaPlayerRef.current = player;
         banubaWebcamRef.current = webcam;
+        banubaCaptureRef.current = new ImageCapture(player);
         setReady(true);
       } catch (err) {
         console.error(err);
@@ -337,6 +357,38 @@ export default function CaptureScreen() {
       stopBanuba();
     };
   }, [useBanuba, retryTick]);
+
+  const blobToDataUrl = (blob) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+
+  const takeSnapshot = async () => {
+    if (banubaCaptureRef.current) {
+      try {
+        const blob = await banubaCaptureRef.current.takePhoto({
+          format: "image/jpeg",
+          quality: 0.92
+        });
+        return await blobToDataUrl(blob);
+      } catch (err) {
+        console.error(err);
+      }
+      return null;
+    }
+    const video = videoRef.current;
+    if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return null;
+
+    const canvas = captureCanvasRef.current || document.createElement("canvas");
+    captureCanvasRef.current = canvas;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.filter = FILTER_STYLE;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.92);
+  };
 
   return (
     <div className="min-h-screen w-full bg-[#0b2d64] flex items-center justify-center px-4 py-6 kids-font">

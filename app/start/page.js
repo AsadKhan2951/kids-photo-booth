@@ -4,18 +4,10 @@ import { useRouter } from "next/navigation";
 import { useBooth } from "../../context/BoothContext";
 import { useMemo, useState } from "react";
 
-const BG_URL = "/assets/Start%20Screen/BG.png";
 const IMG = {
-  logo: "/assets/Main%20Screen/Logo.png",
-  button: "/assets/Start%20Screen/Button.png",
-  name: "/assets/Start%20Screen/Name.png",
-  age: "/assets/Start%20Screen/Age.png",
-  email: "/assets/Start%20Screen/Email.png",
-  number: "/assets/Start%20Screen/Number.png",
-  arrowLeft: "/assets/Start%20Screen/Arrow-2.png",
-  arrowRight: "/assets/Start%20Screen/Arrow.png",
-  heart: "/assets/Start%20Screen/Heart.png",
-  star: "/assets/Start%20Screen/Star.png"
+  button: "/assets/Start%20Screen/Select.png",
+  layerTop: "/assets/Start%20Screen/Layer-Top.jpg",
+  layerBottom: "/assets/Start%20Screen/Layer-Bottom.jpg"
 };
 
 export default function StartScreen() {
@@ -23,21 +15,20 @@ export default function StartScreen() {
   const { state, setUser, resetAll } = useBooth();
   const [form, setForm] = useState(state.user);
   const [error, setError] = useState("");
+  const [activeField, setActiveField] = useState(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   const valid = useMemo(() => {
-    if (!form.name.trim()) return false;
-    if (!String(form.age).trim()) return false;
-    const ageNum = Number(form.age);
-    if (!Number.isFinite(ageNum) || ageNum <= 0) return false;
     if (!form.email.trim()) return false;
-    // simple email check
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return false;
+    // only gmail allowed
+    if (!/^[^\s@]+@gmail\.com$/i.test(form.email.trim())) return false;
+    if (!/^\d{11}$/.test(String(form.phone).trim())) return false;
     return true;
   }, [form]);
 
   const onNext = () => {
     if (!valid) {
-      setError("Please complete all fields to continue.");
+      setError("Only Gmail addresses are allowed, and phone must be 11 digits.");
       return;
     }
     setError("");
@@ -45,121 +36,265 @@ export default function StartScreen() {
     router.push("/character");
   };
 
+  const openKeyboard = (field) => {
+    setActiveField(field);
+    setKeyboardOpen(true);
+    setError("");
+  };
+
+  const closeKeyboard = () => {
+    setKeyboardOpen(false);
+    setActiveField(null);
+  };
+
+  const applyKey = (key) => {
+    if (!activeField) return;
+    setForm((prev) => {
+      const current = String(prev[activeField] ?? "");
+      let next = current;
+      if (key === "Backspace") {
+        next = current.slice(0, -1);
+      } else if (key === "Clear") {
+        next = "";
+      } else if (key === "Space") {
+        next = `${current} `;
+      } else if (key === "Done") {
+        return prev;
+      } else {
+        next = current + key;
+      }
+      if (activeField === "email") {
+        const raw = next.replace(/\s/g, "");
+        const local = raw.split("@")[0];
+        return { ...prev, email: local ? `${local}@gmail.com` : "" };
+      }
+      if (activeField === "phone") {
+        const digits = next.replace(/\D/g, "").slice(0, 11);
+        return { ...prev, phone: digits };
+      }
+      return { ...prev, [activeField]: next };
+    });
+    if (key === "Done") closeKeyboard();
+  };
+
+  const isNumeric = activeField === "age" || activeField === "phone";
+  const isEmail = activeField === "email";
+  const alphaRows = [
+    ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+    ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
+    ["Z", "X", "C", "V", "B", "N", "M"]
+  ];
+  const emailRow = ["@", ".", "-", "_"];
+  const numericRows = [
+    ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+  ];
+
   return (
-    <div className="min-h-screen w-full bg-[#f5b500] flex items-center justify-center px-4 py-6 kids-font">
-      <div className="relative w-full max-w-[520px] aspect-[9/16] overflow-hidden rounded-[32px] shadow-2xl">
-        <div
-          className="absolute inset-0 bg-cover bg-center"
-          style={{ backgroundImage: `url(${BG_URL})` }}
-        />
+    <div className="min-h-screen w-full bg-[#f6c11e] flex items-center justify-center px-4 py-6 kids-font">
+      <div className="relative w-full max-w-[735px] aspect-[9/16] overflow-hidden rounded-[32px] shadow-2xl">
+        <div className="absolute inset-0 bg-[#f6c11e]" />
 
         <div className="absolute inset-0">
-          <div className="absolute left-1/2 top-[-3%] -translate-x-1/2 w-[65%]">
-            <img src={IMG.logo} alt="Little Pipers" className="w-full h-auto" draggable="false" />
-          </div>
-
-          <div className="absolute left-[-6%] top-[22%] w-[60%] h-[18%] pointer-events-none z-10">
-            <img
-              src={IMG.arrowRight}
-              alt=""
-              className="absolute right-[36%] top-[10%] w-[70%] ms-float"
-              draggable="false"
-            />
-          </div>
-
           <img
-            src={IMG.star}
+            src={IMG.layerTop}
             alt=""
-            className="absolute right-[8%] top-[25%] w-[14%] ms-float"
+            className="absolute left-0 top-0 w-full h-auto"
             draggable="false"
           />
-
           <img
-            src={IMG.heart}
+            src={IMG.layerBottom}
             alt=""
-            className="absolute left-[-4%] top-[64%] w-[12%] ms-float"
+            className="absolute left-0 bottom-0 w-full h-auto"
             draggable="false"
           />
-
-          <div className="absolute right-[-6%] bottom-[-1%] w-[60%] h-[20%] pointer-events-none z-10">
-            <img
-              src={IMG.arrowLeft}
-              alt=""
-              className="absolute left-[6%] top-[-1%] w-[100%] ms-float"
-              draggable="false"
-            />
-          </div>
-
-          <div className="absolute left-1/2 top-[28%] -translate-x-1/2 w-[86%] space-y-6">
-            <div className="space-y-2">
-              <div className="text-white text-lg font-bold drop-shadow-sm ml-[20px]">Name</div>
-              <div className="relative">
-                <img src={IMG.name} alt="" className="w-full h-auto" draggable="false" />
-                <input
-                  className="absolute left-[6%] top-1/2 -translate-y-1/2 w-[88%] h-[54%] bg-transparent text-base font-semibold text-slate-600 placeholder:text-slate-400 outline-none"
-                  placeholder="Enter your name"
-                  value={form.name}
-                  onChange={(e) => { setError(""); setForm((s) => ({ ...s, name: e.target.value })); }}
-                />
+          <div className="absolute left-1/2 top-[25%] bottom-[18%] -translate-x-1/2 w-[90%] flex flex-col items-center">
+            <div className="text-center">
+              <div className="text-[#a424c7] font-extrabold tracking-wide text-[clamp(16px,2.7vw,28px)]">
+                ENTER DETAILS
+              </div>
+              <div className="text-[#a424c7] font-semibold text-[clamp(10px,1.9vw,17px)]">
+                Fill in your information
               </div>
             </div>
 
-            <div className="space-y-2">
-              <div className="text-white text-lg font-bold drop-shadow-sm ml-[20px]">Age</div>
-              <div className="relative">
-                <img src={IMG.age} alt="" className="w-full h-auto" draggable="false" />
+            <div
+              className="w-full flex flex-col"
+              style={{ gap: "clamp(5px, 1.2vw, 10px)" }}
+            >
+              <label className="text-[#a424c7] font-bold tracking-wide text-[clamp(10px,1.5vw,14px)]">
+                NAME
                 <input
-                  className="absolute left-[6%] top-1/2 -translate-y-1/2 w-[88%] h-[54%] bg-transparent text-base font-semibold text-slate-600 placeholder:text-slate-400 outline-none"
-                  placeholder="How old are you?"
+                  className="mt-1 w-full rounded-[12px] border-[2.5px] border-white bg-[#ffe38c] px-4 text-[#a424c7] placeholder:text-[#2d2bb8]/70 outline-none"
+                  style={{ height: "clamp(26px, 4.3vw, 38px)" }}
+                  value={form.name}
+                  placeholder="Enter your name"
+                  onChange={(e) => { setError(""); setForm((s) => ({ ...s, name: e.target.value })); }}
+                  onFocus={() => openKeyboard("name")}
+                />
+              </label>
+
+              <label className="text-[#a424c7] font-bold tracking-wide text-[clamp(10px,1.5vw,14px)]">
+                AGE
+                <input
+                  className="mt-1 w-full rounded-[12px] border-[2.5px] border-white bg-[#ffe38c] px-4 text-[#a424c7] placeholder:text-[#2d2bb8]/70 outline-none"
+                  style={{ height: "clamp(26px, 4.3vw, 38px)" }}
                   inputMode="numeric"
                   value={form.age}
+                  placeholder="Enter your age"
                   onChange={(e) => { setError(""); setForm((s) => ({ ...s, age: e.target.value })); }}
+                  onFocus={() => openKeyboard("age")}
                 />
-              </div>
-            </div>
+              </label>
 
-            <div className="space-y-2">
-              <div className="text-white text-lg font-bold drop-shadow-sm ml-[20px]">Email</div>
-              <div className="relative">
-                <img src={IMG.email} alt="" className="w-full h-auto" draggable="false" />
+              <label className="text-[#a424c7] font-bold tracking-wide text-[clamp(10px,1.5vw,14px)]">
+                EMAIL ADDRESS
                 <input
-                  className="absolute left-[6%] top-1/2 -translate-y-1/2 w-[88%] h-[54%] bg-transparent text-base font-semibold text-slate-600 placeholder:text-slate-400 outline-none"
-                  placeholder="parents@example.com"
+                  className="mt-1 w-full rounded-[12px] border-[2.5px] border-white bg-[#ffe38c] px-4 text-[#a424c7] placeholder:text-[#2d2bb8]/70 outline-none"
+                  style={{ height: "clamp(26px, 4.3vw, 38px)" }}
                   value={form.email}
-                  onChange={(e) => { setError(""); setForm((s) => ({ ...s, email: e.target.value })); }}
+                  placeholder="yourname"
+                  onChange={(e) => {
+                    setError("");
+                    const raw = e.target.value.replace(/\s/g, "");
+                    const local = raw.split("@")[0];
+                    setForm((s) => ({ ...s, email: local ? `${local}@gmail.com` : "" }));
+                  }}
+                  onFocus={() => openKeyboard("email")}
                 />
-              </div>
-            </div>
+              </label>
 
-            <div className="space-y-2">
-              <div className="text-white text-lg font-bold drop-shadow-sm ml-[20px]">Contact Number</div>
-              <div className="relative">
-                <img src={IMG.number} alt="" className="w-full h-auto" draggable="false" />
+              <label className="text-[#a424c7] font-bold tracking-wide text-[clamp(10px,1.5vw,14px)]">
+                CONTACT NUMBER
                 <input
-                  className="absolute left-[6%] top-1/2 -translate-y-1/2 w-[88%] h-[54%] bg-transparent text-base font-semibold text-slate-600 placeholder:text-slate-400 outline-none"
-                  placeholder="123-456-7890"
+                  className="mt-1 w-full rounded-[12px] border-[2.5px] border-white bg-[#ffe38c] px-4 text-[#a424c7] placeholder:text-[#2d2bb8]/70 outline-none"
+                  style={{ height: "clamp(26px, 4.3vw, 38px)" }}
                   value={form.phone}
-                  onChange={(e) => { setError(""); setForm((s) => ({ ...s, phone: e.target.value })); }}
+                  placeholder="11-digit number"
+                  inputMode="numeric"
+                  pattern="\d*"
+                  onChange={(e) => {
+                    setError("");
+                    const digits = e.target.value.replace(/\D/g, "").slice(0, 11);
+                    setForm((s) => ({ ...s, phone: digits }));
+                  }}
+                  onFocus={() => openKeyboard("phone")}
                 />
-              </div>
+              </label>
             </div>
-          </div>
 
-          <div className="absolute left-1/2 bottom-[12%] -translate-x-1/2 w-[75%] bottom-[3%]">
-            <button
-              type="button"
-              onClick={onNext}
-              className="w-full transition-transform active:scale-[0.98] hover:scale-[1.02]"
-              aria-label="Next"
+            <div
+              className={`mt-2 w-[26%] transition-opacity ${keyboardOpen ? "opacity-0 pointer-events-none" : "opacity-100"}`}
             >
-              <img src={IMG.button} alt="" className="w-full h-auto ms-float-slow" draggable="false" />
-            </button>
+              <button
+                type="button"
+                onClick={onNext}
+                className="w-full transition-transform active:scale-[0.98] hover:scale-[1.02]"
+                aria-label="Next"
+              >
+                <img src={IMG.button} alt="" className="w-full h-auto" draggable="false" />
+              </button>
+            
+            </div>
             {error ? (
-              <div className="mt-2 text-center text-sm font-semibold text-white drop-shadow-sm">
+              <div className="mt-2 rounded-lg bg-white/70 px-3 py-1 text-center text-xs font-semibold text-[#a424c7]">
                 {error}
               </div>
             ) : null}
           </div>
+
+          {keyboardOpen ? (
+            <div className="absolute left-1/2 bottom-[6%] w-[92%] -translate-x-1/2 rounded-[18px] border-[2px] border-white/40 bg-[#0a3e9e]/95 p-3 text-white shadow-[0_18px_30px_rgba(0,0,0,0.35)]">
+              <div className="mb-2 flex items-center justify-between text-[12px] font-semibold tracking-wide">
+                <div className="uppercase">
+                  {activeField ? `${activeField} input` : "Keyboard"}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => applyKey("Done")}
+                  className="rounded-lg bg-white/90 px-3 py-1 text-[#0b4bc0]"
+                >
+                  Done
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                {(isNumeric ? numericRows : alphaRows).map((row) => (
+                  <div key={row.join("")} className="flex justify-center gap-2">
+                    {row.map((key) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => applyKey(key)}
+                        className="min-w-[32px] flex-1 rounded-xl bg-white/10 px-2 py-2 text-sm font-bold"
+                      >
+                        {key}
+                      </button>
+                    ))}
+                    {row === alphaRows[alphaRows.length - 1] && (
+                      <button
+                        type="button"
+                        onClick={() => applyKey("Backspace")}
+                        className="min-w-[52px] rounded-xl bg-white/10 px-3 py-2 text-sm font-bold"
+                      >
+                        ⌫
+                      </button>
+                    )}
+                    {isNumeric && row === numericRows[0] && (
+                      <button
+                        type="button"
+                        onClick={() => applyKey("Backspace")}
+                        className="min-w-[52px] rounded-xl bg-white/10 px-3 py-2 text-sm font-bold"
+                      >
+                        ⌫
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                {!isNumeric && (
+                  <div className="flex justify-center gap-2">
+                    {(isEmail ? emailRow : ["Space"]).map((key) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => applyKey(key === "Space" ? "Space" : key)}
+                        className="rounded-xl bg-white/10 px-3 py-2 text-sm font-bold"
+                        style={{ minWidth: key === "Space" ? "160px" : "48px" }}
+                      >
+                        {key === "Space" ? "Space" : key}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => applyKey("Clear")}
+                      className="rounded-xl bg-white/10 px-3 py-2 text-sm font-bold"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+
+                {isNumeric && (
+                  <div className="flex justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => applyKey("Clear")}
+                      className="rounded-xl bg-white/10 px-3 py-2 text-sm font-bold"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyKey("Done")}
+                      className="rounded-xl bg-white/90 px-4 py-2 text-sm font-bold text-[#0b4bc0]"
+                    >
+                      Done
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
 
           <button
             type="button"

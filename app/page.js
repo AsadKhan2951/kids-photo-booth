@@ -29,7 +29,7 @@ export default function MainScreen() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#2a0b4f] flex items-center justify-center px-4 py-6">
+    <div className="min-h-screen w-full bg-[#2a0b4f] flex items-center justify-center px-4 py-6 kids-font">
       <div className="relative w-full max-w-[520px] aspect-[9/16] overflow-hidden rounded-[32px] shadow-2xl">
         <div
           className="absolute inset-0 bg-cover bg-center"
